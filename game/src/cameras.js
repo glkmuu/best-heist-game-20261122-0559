@@ -1,98 +1,74 @@
-// cameras.js — sweeping security cameras and laser tripwires.
-// One job: the museum's electronic eyes. Nothing here draws anything.
-import { TUNING } from './config.js';
-import { lineOfSight, segmentHitsCircle, inVent, distanceToSegment, angleDiff } from './world.js';
+// cameras.js — wall cameras that sweep a red cone back and forth.
+// EMP (E, 300 pts) knocks every camera OFFLINE for 8 seconds.
 
-export function createCameras(def) {
-  return def.cameras.map((c, i) => ({
-    id: i,
-    x: c.x,
-    y: c.y,
-    baseAngle: c.baseAngle,
-    sweep: c.sweep,
-    speed: c.speed,
-    angle: c.baseAngle,
-    phase: i * 1.7,
-    spot: 0, // 0..1 camera spotting meter
-    disabledUntil: 0,
-  }));
+import { TUNING, PALETTE } from './config.js';
+import { losClear, pointInRect } from './world.js';
+
+export function makeCamera(def) {
+  return {
+    x: def.x, y: def.y, base: def.base, sweep: def.sweep,
+    angle: def.base, t: Math.random() * 6, offlineT: 0, suspicion: 0,
+  };
 }
 
-export function createLasers(def) {
-  return (def.lasers || []).map((l, i) => ({
-    id: i,
-    x1: l.x1, y1: l.y1, x2: l.x2, y2: l.y2,
-    cooldown: 0,
-    flash: 0,
-  }));
-}
-
-function cameraSeesPlayer(cam, player, world, state) {
-  if (player.dead) return false;
-  const dx = player.x - cam.x;
-  const dy = player.y - cam.y;
-  const d = Math.hypot(dx, dy);
-  if (d > TUNING.cameraConeRange) return false;
-  const ang = Math.atan2(dy, dx);
-  if (Math.abs(angleDiff(ang, cam.angle)) > TUNING.cameraConeHalfAngle) return false;
-  if (!lineOfSight(world, cam.x, cam.y, player.x, player.y)) return false;
-  for (const c of state.smokes) {
-    if (segmentHitsCircle(cam.x, cam.y, player.x, player.y, c.x, c.y, c.r)) return false;
+export function updateCamera(cam, dt, game) {
+  if (cam.offlineT > 0) { cam.offlineT -= dt; cam.suspicion = 0; return; }
+  cam.t += dt;
+  cam.angle = cam.base + Math.sin(cam.t * TUNING.camSweepSpeed) * cam.sweep;
+  const p = game.player;
+  if (game.disguiseT > 0) { cam.suspicion = Math.max(0, cam.suspicion - TUNING.decayRate * dt); return; }
+  const dx = p.x - cam.x, dy = p.y - cam.y;
+  const dist = Math.hypot(dx, dy);
+  let sees = false;
+  if (dist < TUNING.camRange) {
+    let ang = Math.atan2(dy, dx) - cam.angle;
+    while (ang > Math.PI) ang -= Math.PI * 2;
+    while (ang < -Math.PI) ang += Math.PI * 2;
+    const inSmoke = game.smokes.some((s) => {
+      const sx = p.x - s.x, sy = p.y - s.y;
+      return sx * sx + sy * sy < s.r * s.r;
+    });
+    sees = Math.abs(ang) < TUNING.camHalf && !inSmoke
+      && losClear(cam.x, cam.y, p.x, p.y, game.floor.walls);
   }
-  if (inVent(world, player.x, player.y)) return false;
-  return true;
-}
-
-export function updateCameras(state, dt, world) {
-  for (const cam of state.cameras) {
-    cam.angle = cam.baseAngle + Math.sin(state.time * cam.speed + cam.phase) * cam.sweep;
-    if (state.time < cam.disabledUntil) {
-      cam.spot = 0;
-      continue; // EMP: camera offline, grey cone, no spotting.
+  if (sees) {
+    cam.suspicion = Math.min(1, cam.suspicion + TUNING.detectRate * dt);
+    if (cam.suspicion >= 1) {
+      cam.suspicion = 0.4;
+      game.alarm = Math.min(100, game.alarm + TUNING.alarmPerSpot);
+      game.ghost = false;
+      game.flash = 'CAMERA SPOTTED YOU!';
+      game.flashT = 1.6;
     }
-    const sees = cameraSeesPlayer(cam, state.player, world, state);
-    if (sees) {
-      cam.spot = Math.min(1, cam.spot + dt * 0.55);
-      if (cam.spot >= 1) {
-        cam.spot = 0.35;
-        state.alarm = Math.min(100, state.alarm + TUNING.alarmOnCameraSpot);
-        state.ghost = false;
-        state.events.push({ type: 'cameraSpot', camera: cam.id });
-        // The nearest guard walks over to look.
-        let best = null;
-        let bestD = Infinity;
-        for (const g of state.guards) {
-          const d = Math.hypot(g.x - state.player.x, g.y - state.player.y);
-          if (d < bestD) { bestD = d; best = g; }
-        }
-        if (best && best.state === 'CALM') {
-          best.state = 'SUSPICIOUS';
-          best.investigate = { x: state.player.x, y: state.player.y };
-          best.waitT = 0;
-        }
-      }
-    } else {
-      cam.spot = Math.max(0, cam.spot - dt * 0.4);
-    }
+  } else {
+    cam.suspicion = Math.max(0, cam.suspicion - TUNING.decayRate * dt);
   }
 }
 
-// A laser trips when the Fox crosses its beam standing up.
-// Sneaking crawls under it safely — the beam is drawn at ankle height.
-export function updateLasers(state, dt, world) {
-  for (const l of state.lasers) {
-    l.cooldown = Math.max(0, l.cooldown - dt);
-    l.flash = Math.max(0, l.flash - dt);
-    const p = state.player;
-    if (p.dead || p.mode === 'sneak') continue;
-    if (l.cooldown > 0) continue;
-    const d = distanceToSegment(p.x, p.y, l.x1, l.y1, l.x2, l.y2);
-    if (d < p.r + 2) {
-      l.cooldown = 1.2;
-      l.flash = 0.6;
-      state.alarm = Math.min(100, state.alarm + TUNING.alarmOnLaserTrip);
-      state.ghost = false;
-      state.events.push({ type: 'laserTrip', laser: l.id });
-    }
-  }
+export function drawCameraCone(ctx, cam) {
+  if (cam.offlineT > 0) return;
+  ctx.beginPath();
+  ctx.moveTo(cam.x, cam.y);
+  ctx.arc(cam.x, cam.y, TUNING.camRange, cam.angle - TUNING.camHalf, cam.angle + TUNING.camHalf);
+  ctx.closePath();
+  ctx.fillStyle = cam.suspicion > 0.05 ? 'rgba(255, 60, 60, 0.45)' : PALETTE.camCone;
+  ctx.fill();
+  ctx.strokeStyle = PALETTE.camEdge;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+export function drawCamera(ctx, cam) {
+  ctx.save();
+  ctx.translate(cam.x, cam.y);
+  ctx.fillStyle = cam.offlineT > 0 ? '#777' : '#2b2b2b';
+  ctx.fillRect(-11, -8, 22, 16);
+  ctx.rotate(cam.angle);
+  ctx.fillStyle = cam.offlineT > 0 ? '#999' : '#ff2d55';
+  ctx.beginPath(); ctx.arc(12, 0, 5, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+  ctx.font = 'bold 11px Georgia, serif';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = cam.offlineT > 0 ? '#555' : '#b3122e';
+  ctx.fillText(cam.offlineT > 0 ? 'OFFLINE' : 'CAMERA', cam.x, cam.y - 16);
 }

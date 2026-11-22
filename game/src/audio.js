@@ -1,56 +1,34 @@
-// audio.js — tiny WebAudio synth: no audio files, everything is an oscillator.
-// One job: sounds. Safe to call before any user gesture; it stays silent until one.
-let ctx = null;
-let muted = false;
+// audio.js — tiny WebAudio bleeps, synthesised at run time, no audio files.
+// Created lazily on the first keypress so browsers never block it.
 
-function ensureCtx() {
-  if (ctx) return ctx;
-  try {
-    const AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) return null;
-    ctx = new AC();
-  } catch (err) {
-    ctx = null;
+export function makeAudio() {
+  let ctx = null;
+  function ac() {
+    if (!ctx) {
+      try { ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch { return null; }
+    }
+    if (ctx && ctx.state === 'suspended') ctx.resume();
+    return ctx;
   }
-  return ctx;
-}
-
-function blip(freq, dur, type, vol, slideTo) {
-  if (muted) return;
-  const ac = ensureCtx();
-  if (!ac || ac.state === 'suspended') return;
-  try {
-    const osc = ac.createOscillator();
-    const gain = ac.createGain();
-    osc.type = type || 'sine';
-    osc.frequency.setValueAtTime(freq, ac.currentTime);
-    if (slideTo) osc.frequency.exponentialRampToValueAtTime(slideTo, ac.currentTime + dur);
-    gain.gain.setValueAtTime(vol || 0.12, ac.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + dur);
-    osc.connect(gain);
-    gain.connect(ac.destination);
-    osc.start();
-    osc.stop(ac.currentTime + dur);
-  } catch (err) {
-    // Audio is decoration; a failure must never break the game.
+  function blip(freq, dur, type, vol) {
+    const c = ac();
+    if (!c) return;
+    const o = c.createOscillator();
+    const g = c.createGain();
+    o.type = type || 'sine';
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(vol || 0.08, c.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + dur);
+    o.connect(g).connect(c.destination);
+    o.start();
+    o.stop(c.currentTime + dur);
   }
+  return {
+    pickup() { blip(880, 0.12, 'sine', 0.09); setTimeout(() => blip(1320, 0.15, 'sine', 0.09), 70); },
+    coin() { blip(1560, 0.08, 'triangle', 0.07); },
+    tool() { blip(440, 0.15, 'square', 0.05); setTimeout(() => blip(660, 0.15, 'square', 0.05), 90); },
+    alarm() { blip(220, 0.25, 'sawtooth', 0.07); },
+    caught() { blip(180, 0.4, 'sawtooth', 0.09); setTimeout(() => blip(120, 0.5, 'sawtooth', 0.09), 200); },
+    win() { [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => blip(f, 0.22, 'sine', 0.09), i * 120)); },
+  };
 }
-
-export const sfx = {
-  unlock() { ensureCtx(); },
-  toggleMute() { muted = !muted; return muted; },
-  isMuted() { return muted; },
-  step() { blip(140, 0.05, 'triangle', 0.03); },
-  pickup() { blip(880, 0.12, 'sine', 0.14, 1320); },
-  coin() { blip(1900, 0.09, 'square', 0.06, 1500); setTimeout(() => blip(2400, 0.1, 'square', 0.05), 70); },
-  alert() { blip(220, 0.35, 'sawtooth', 0.12, 440); },
-  cameraSpot() { blip(660, 0.15, 'square', 0.08, 330); },
-  laser() { blip(1200, 0.2, 'sawtooth', 0.09, 300); },
-  smoke() { blip(300, 0.3, 'sine', 0.08, 90); },
-  emp() { blip(900, 0.4, 'sawtooth', 0.08, 80); },
-  denied() { blip(160, 0.12, 'square', 0.08); },
-  caught() { blip(330, 0.5, 'sawtooth', 0.14, 110); },
-  win() {
-    [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => blip(f, 0.22, 'sine', 0.12), i * 110));
-  },
-};

@@ -1,34 +1,6 @@
-/* styles.css — page chrome for THE GILDED FOX. The game itself is canvas. */
-* { box-sizing: border-box; }
-html, body {
-  margin: 0;
-  padding: 0;
-  background: #0a2021;
-  color: #f3e9cf;
-  font-family: Georgia, 'Times New Roman', serif;
-}
-#stage {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 12px;
-}
-#game {
-  width: min(1280px, 96vw);
-  height: auto;
-  aspect-ratio: 1280 / 800;
-  border: 3px solid #d9a521;
-  outline: 1px solid rgba(255, 211, 77, 0.5);
-  outline-offset: 4px;
-  background: #f3e9cf;
-  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.55);
-}
-#help {
-  margin: 0;
-  font-size: 14px;
-  letter-spacing: 0.04em;
-  color: #bcd8d2;
-}
+html, body { margin: 0; padding: 0; background: #1a0b12; height: 100%; }
+body { display: flex; align-items: center; justify-content: center; font-family: Georgia, 'Times New Roman', serif; }
+#stage { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+#game { display: block; width: 1280px; height: 800px; max-width: 100vw; max-height: calc(100vh - 34px);
+  background: #f5eeda; box-shadow: 0 0 0 4px #c9a227, 0 18px 60px rgba(0,0,0,.7); }
+#hint { color: #e8c96a; font-size: 14px; letter-spacing: .4px; text-align: center; }

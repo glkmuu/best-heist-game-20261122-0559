@@ -1,69 +1,87 @@
-// player.js — the Gilded Fox: movement, sneak/run, noise and loot pickup.
-// One job: the thief. Nothing here draws anything.
-import { TUNING } from './config.js';
-import { moveCircle, inVent } from './world.js';
+// player.js — the thief: a burglar in a black suit and a red scarf.
+// Runs fast and loud, sneaks slow and quiet. Loot is picked up by walking
+// over it; the exit stays locked until every loot target is taken.
 
-export function createPlayer(def) {
+import { TUNING } from './config.js';
+import { moveCircle, pointInRect } from './world.js';
+
+export function makePlayer(start) {
   return {
-    x: def.playerStart.x,
-    y: def.playerStart.y,
-    r: TUNING.playerRadius,
-    dirX: 0,
-    dirY: 1,
-    mode: 'walk', // walk | sneak | run
-    moving: false,
-    dead: false,
-    stepT: 0,
+    x: start.x, y: start.y, r: TUNING.playerRadius,
+    dir: -Math.PI / 2, sneaking: false, moving: false,
+    lives: 3, lootGot: 0, score: 0,
   };
 }
 
-export function updatePlayer(state, dt, world, input) {
-  const p = state.player;
-  if (p.dead) return;
-
-  const ax = input.axisX();
-  const ay = input.axisY();
-  const len = Math.hypot(ax, ay);
-  p.moving = len > 0;
-
-  let mode = 'walk';
-  if (input.sneak()) mode = 'sneak';
-  else if (input.run()) mode = 'run';
-  if (inVent(world, p.x, p.y)) mode = 'sneak'; // vents are a slow crawl
-  p.mode = mode;
-
-  const speed = mode === 'sneak' ? TUNING.sneakSpeed
-    : mode === 'run' ? TUNING.runSpeed : TUNING.walkSpeed;
-  if (len > 0) {
-    const nx = ax / len;
-    const ny = ay / len;
-    p.dirX = nx;
-    p.dirY = ny;
-    moveCircle(world, p, nx * speed * dt, ny * speed * dt);
+export function updatePlayer(p, dt, input, game) {
+  let mx = 0, my = 0;
+  if (input.left) mx -= 1;
+  if (input.right) mx += 1;
+  if (input.up) my -= 1;
+  if (input.down) my += 1;
+  p.moving = mx !== 0 || my !== 0;
+  p.sneaking = !!input.sneak && p.moving;
+  if (p.moving) {
+    const len = Math.hypot(mx, my);
+    const speed = p.sneaking ? TUNING.sneakSpeed : TUNING.runSpeed;
+    const dx = (mx / len) * speed * dt;
+    const dy = (my / len) * speed * dt;
+    p.dir = Math.atan2(dy, dx);
+    const solids = [...game.floor.walls, ...game.floor.tables];
+    const moved = moveCircle(p.x, p.y, dx, dy, p.r, solids);
+    p.x = moved.x; p.y = moved.y;
   }
-
-  // Running is loud: a noise ring guards can hear.
-  if (mode === 'run' && p.moving) {
-    state.noises.push({ x: p.x, y: p.y, radius: TUNING.noiseRunRadius, t: 0.25, kind: 'steps' });
-    p.stepT -= dt;
-    if (p.stepT <= 0) {
-      p.stepT = 0.28;
-      state.events.push({ type: 'step' });
-    }
-  }
-
-  // Loot auto-pickup on touch — no button, so it can never misfire.
-  for (const loot of state.loot) {
-    if (loot.taken) continue;
-    if (Math.hypot(loot.x - p.x, loot.y - p.y) < p.r + 22) {
+  // Loot pickup.
+  for (const loot of game.loot) {
+    if (!loot.taken && Math.hypot(loot.x - p.x, loot.y - p.y) < p.r + 22) {
       loot.taken = true;
-      state.score += loot.value;
-      state.lootGot += 1;
-      state.events.push({ type: 'pickup', loot });
-      if (state.lootGot === state.loot.length) {
-        state.exitOpen = true;
-        state.events.push({ type: 'exitOpen' });
-      }
+      p.lootGot += 1;
+      p.score += TUNING.lootScore;
+      game.flash = `LOOT! ${loot.label}  +${TUNING.lootScore}`;
+      game.flashT = 1.6;
+      game.audio.pickup();
     }
+  }
+}
+
+export function playerAtExit(p, floor) {
+  return pointInRect(p.x, p.y, floor.exit);
+}
+
+export function drawPlayer(ctx, p, time) {
+  const bob = p.moving ? Math.sin(time * 12) * 2 : 0;
+  ctx.save();
+  ctx.translate(p.x, p.y + bob);
+  // Shadow.
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.beginPath(); ctx.ellipse(0, 15, p.r + 1, 7, 0, 0, Math.PI * 2); ctx.fill();
+  // Black suit body.
+  ctx.fillStyle = '#141414';
+  ctx.beginPath(); ctx.arc(0, 0, p.r, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#c9a227';
+  ctx.lineWidth = 2.5;
+  ctx.stroke();
+  // Red scarf — the thief's signature, bright against the ivory floor.
+  ctx.strokeStyle = '#d21f3c';
+  ctx.lineWidth = 6;
+  ctx.beginPath(); ctx.arc(0, 0, 12, 0.15 * Math.PI, 0.85 * Math.PI); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(-10, 8); ctx.lineTo(-16, 20); ctx.moveTo(-6, 10); ctx.lineTo(-8, 22); ctx.stroke();
+  // Face + mask.
+  ctx.fillStyle = '#f2c9a0';
+  ctx.beginPath(); ctx.arc(0, -2, 9, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#141414';
+  ctx.fillRect(-9, -5, 18, 5);
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(-3.5, -2.5, 1.6, 0, Math.PI * 2); ctx.arc(3.5, -2.5, 1.6, 0, Math.PI * 2); ctx.fill();
+  // Direction tick.
+  ctx.rotate(p.dir);
+  ctx.fillStyle = '#f2d060';
+  ctx.beginPath(); ctx.moveTo(14, -4); ctx.lineTo(24, 0); ctx.lineTo(14, 4); ctx.closePath(); ctx.fill();
+  ctx.restore();
+  if (p.sneaking) {
+    ctx.font = 'bold 11px Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#3a2a4d';
+    ctx.fillText('SNEAKING', p.x, p.y - 26);
   }
 }
