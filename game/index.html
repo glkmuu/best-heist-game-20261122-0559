@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Gilded Hour — a heist game</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="wrap">
+  <header id="hud">
+    <div class="hud-left">
+      <span id="game-title">THE GILDED HOUR</span>
+      <span id="level-name">Level 1 — The Gallery</span>
+    </div>
+    <div class="hud-mid">
+      <span id="loot-count">Loot 0/2</span>
+      <span class="meter"><span class="meter-label" id="alarm-text">ALARM 0%</span><span class="bar"><span id="alarm-fill" class="fill ok"></span></span></span>
+      <span class="meter"><span class="meter-label" id="eye-text">HIDDEN</span><span class="bar"><span id="eye-fill" class="fill eye"></span></span></span>
+      <span id="timer">0:00</span>
+    </div>
+    <div class="hud-right">
+      <span id="score">Score 0</span>
+      <span id="lives">♥♥♥</span>
+      <span id="coins">Coins 3</span>
+      <span id="hints">Hints 3 (H)</span>
+    </div>
+  </header>
+  <div id="stage">
+    <canvas id="game" width="960" height="600"></canvas>
+    <div id="banner" class="hidden"></div>
+
+    <div id="screen-title" class="screen">
+      <h1>THE GILDED HOUR</h1>
+      <p class="tag">One thief. Three floors. Every vault in the tower — before the alarm fills.</p>
+      <div class="howto">
+        <b>How to play</b><br>
+        WASD / arrows — move &nbsp;·&nbsp; Shift — sneak (slow, quiet, hard to spot)<br>
+        E — pick up loot &nbsp;·&nbsp; Q — toss a coin to distract a guard<br>
+        H — hint (exit arrow, 3 per level) &nbsp;·&nbsp; R — restart level<br>
+        P — pause &nbsp;·&nbsp; M — mute<br><br>
+        Guards patrol with vision cones — walls and cover block their sight.
+        Cameras sweep. Lasers trip the alarm unless you crawl under them.
+        Lift <b>all</b> the loot to unlock the exit, then slip out.
+        Fill the alarm meter and you are caught — 3 lives.
+      </div>
+      <button id="btn-start" class="big">START THE HEIST</button>
+      <p class="dim">An original game — art, levels and sounds made for this bounty.</p>
+    </div>
+
+    <div id="screen-level" class="screen hidden">
+      <h1 id="level-title">Level complete!</h1>
+      <p id="level-stats"></p>
+      <button id="btn-next" class="big">NEXT LEVEL</button>
+    </div>
+
+    <div id="screen-caught" class="screen hidden">
+      <h1>CAUGHT!</h1>
+      <p id="caught-text"></p>
+      <button id="btn-retry" class="big">TRY THE LEVEL AGAIN</button>
+    </div>
+
+    <div id="screen-complete" class="screen hidden">
+      <h1>THE GILDED HOUR — COMPLETE</h1>
+      <p id="final-stats"></p>
+      <button id="btn-again" class="big">PLAY AGAIN</button>
+    </div>
+
+    <div id="screen-paused" class="screen hidden">
+      <h1>PAUSED</h1>
+      <p>Press P or click below to keep stealing.</p>
+      <button id="btn-resume" class="big">RESUME</button>
+    </div>
+  </div>
+  <footer id="help">
+    WASD move · Shift sneak · E loot · Q coin · H hint · R restart · P pause · M mute
+  </footer>
+</div>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
