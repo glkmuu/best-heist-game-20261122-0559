@@ -1,86 +1,69 @@
-// player.js — the thief: movement, sneak/run, noise, coin toss, loot.
-// WASD/arrows move. Shift = sneak (slow, quiet, small detection radius).
-// Full speed is loud: guards hear running footsteps. Q tosses a coin ahead
-// of the thief; the clink pulls the nearest guard to investigate the spot.
+// player.js — the Gilded Fox: movement, sneak/run, noise and loot pickup.
+// One job: the thief. Nothing here draws anything.
+import { TUNING } from './config.js';
+import { moveCircle, inVent } from './world.js';
 
-import { TUNE } from './config.js';
-import { clamp, moveWithCollision } from './world.js';
-
-export function makePlayer(start) {
+export function createPlayer(def) {
   return {
-    x: start.x, y: start.y,
-    angle: -Math.PI / 2,
-    sneaking: false,
-    running: false,
+    x: def.playerStart.x,
+    y: def.playerStart.y,
+    r: TUNING.playerRadius,
+    dirX: 0,
+    dirY: 1,
+    mode: 'walk', // walk | sneak | run
     moving: false,
-    speed: 0,
-    coins: TUNE.coinsPerLevel,
-    hints: TUNE.hintsPerLevel,
-    inLight: false,
-    stepTimer: 0,
-    faceX: 0, faceY: -1,
+    dead: false,
+    stepT: 0,
   };
 }
 
-export function updatePlayer(p, dt, input, solids) {
-  let dx = 0, dy = 0;
-  if (input.left) dx -= 1;
-  if (input.right) dx += 1;
-  if (input.up) dy -= 1;
-  if (input.down) dy += 1;
-  const len = Math.hypot(dx, dy);
+export function updatePlayer(state, dt, world, input) {
+  const p = state.player;
+  if (p.dead) return;
+
+  const ax = input.axisX();
+  const ay = input.axisY();
+  const len = Math.hypot(ax, ay);
   p.moving = len > 0;
-  if (!p.moving) { p.speed = 0; p.running = false; return; }
-  dx /= len; dy /= len;
-  p.faceX = dx; p.faceY = dy;
-  p.angle = Math.atan2(dy, dx);
-  p.sneaking = !!input.sneak;
-  // Sneak is slow; otherwise the thief moves at full (loud) speed.
-  const speed = p.sneaking ? TUNE.sneakSpeed : TUNE.runSpeed;
-  p.speed = speed;
-  p.running = !p.sneaking;
-  const pos = moveWithCollision(p.x, p.y, TUNE.playerRadius, dx * speed * dt, dy * speed * dt, solids);
-  p.x = pos.x; p.y = pos.y;
-  p.stepTimer += dt * (p.sneaking ? 0.5 : 1);
-}
 
-export function noiseRadius(p) {
-  if (!p.moving) return 0;
-  if (p.sneaking) return TUNE.sneakNoiseRadius;
-  return TUNE.runNoiseRadius;
-}
+  let mode = 'walk';
+  if (input.sneak()) mode = 'sneak';
+  else if (input.run()) mode = 'run';
+  if (inVent(world, p.x, p.y)) mode = 'sneak'; // vents are a slow crawl
+  p.mode = mode;
 
-// Toss a coin to (tx,ty). Returns the coin object or null when out of coins.
-export function tossCoin(p, tx, ty) {
-  if (p.coins <= 0) return null;
-  p.coins -= 1;
-  const d = Math.hypot(tx - p.x, ty - p.y);
-  const maxThrow = 190;
-  const k = d > maxThrow ? maxThrow / d : 1;
-  return {
-    x: p.x + (tx - p.x) * k,
-    y: p.y + (ty - p.y) * k,
-    t: 0,       // flight time
-    landed: false,
-    ring: 0,    // expanding sound ring after landing
-  };
-}
-
-export function updateCoin(coin, dt) {
-  if (!coin) return null;
-  coin.t += dt;
-  if (coin.t >= 0.45 && !coin.landed) {
-    coin.landed = true;
-    coin.ring = 1;
+  const speed = mode === 'sneak' ? TUNING.sneakSpeed
+    : mode === 'run' ? TUNING.runSpeed : TUNING.walkSpeed;
+  if (len > 0) {
+    const nx = ax / len;
+    const ny = ay / len;
+    p.dirX = nx;
+    p.dirY = ny;
+    moveCircle(world, p, nx * speed * dt, ny * speed * dt);
   }
-  if (coin.landed) {
-    coin.ring += dt * 90;
-    if (coin.ring > 130) return null; // ring fades, coin spent
-  }
-  return coin;
-}
 
-export function clampToWorld(p, w, h) {
-  p.x = clamp(p.x, 20 + TUNE.playerRadius, w - 20 - TUNE.playerRadius);
-  p.y = clamp(p.y, 20 + TUNE.playerRadius, h - 20 - TUNE.playerRadius);
+  // Running is loud: a noise ring guards can hear.
+  if (mode === 'run' && p.moving) {
+    state.noises.push({ x: p.x, y: p.y, radius: TUNING.noiseRunRadius, t: 0.25, kind: 'steps' });
+    p.stepT -= dt;
+    if (p.stepT <= 0) {
+      p.stepT = 0.28;
+      state.events.push({ type: 'step' });
+    }
+  }
+
+  // Loot auto-pickup on touch — no button, so it can never misfire.
+  for (const loot of state.loot) {
+    if (loot.taken) continue;
+    if (Math.hypot(loot.x - p.x, loot.y - p.y) < p.r + 22) {
+      loot.taken = true;
+      state.score += loot.value;
+      state.lootGot += 1;
+      state.events.push({ type: 'pickup', loot });
+      if (state.lootGot === state.loot.length) {
+        state.exitOpen = true;
+        state.events.push({ type: 'exitOpen' });
+      }
+    }
+  }
 }

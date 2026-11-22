@@ -1,368 +1,283 @@
-// main.js — game loop and state machine for "The Gilded Hour".
-// Screens: title -> playing -> leveldone -> (next level) -> complete.
-// Caught (alarm 100% or touched by an alerted guard) costs a life and
-// restarts the level. All loot collected unlocks the exit; reaching it
-// completes the level with time + ghost bonuses.
-
-import { LEVELS, TUNE, WORLD_W, WORLD_H } from './config.js';
-import { hasLineOfSight, dist, pointInRect } from './world.js';
-import { makeGuard, makeDog, updateGuard, guardSeesPlayer } from './guards.js';
-import { makeCamera, updateCamera, cameraSeesPlayer, makeLaser, laserTripsPlayer } from './cameras.js';
-import { makePlayer, updatePlayer, tossCoin, updateCoin, clampToWorld } from './player.js';
-import { render } from './render.js';
-import { makeInput, bindInput, consumePress } from './input.js';
-import { makeAudio } from './audio.js';
-import { makeUI } from './ui.js';
+// main.js — game loop and state machine for THE GILDED FOX.
+// One job: wire every module together and own the screens.
+import { VIEW_W, VIEW_H, TUNING, levelByIndex } from './config.js';
+import { buildWorld } from './world.js';
+import { createGuards, updateGuards } from './guards.js';
+import { createCameras, createLasers, updateCameras, updateLasers } from './cameras.js';
+import { createPlayer, updatePlayer } from './player.js';
+import { throwCoin, dropSmoke, triggerEMP, updateTools } from './tools.js';
+import { drawGame } from './render.js';
+import {
+  drawHUD, drawTitle, drawLevelComplete, drawGameComplete, drawGameOver,
+  drawCaughtFlash, drawPaused,
+} from './hud.js';
+import { createInput } from './input.js';
+import { sfx } from './audio.js';
 import { applyShot } from './shots.js';
 
 const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
+canvas.width = VIEW_W;
+canvas.height = VIEW_H;
+const g = canvas.getContext('2d');
 
-const state = {
-  screen: 'title', // title | playing | paused | leveldone | caught | complete
-  levelIndex: 0,
-  level: null,
-  player: null,
-  guards: [],
-  cameras: [],
-  lasers: [],
-  coin: null,
-  coinSpot: null,
-  alarm: 0,
-  maxDetection: 0,
-  lootGot: 0,
-  score: 0,
-  lives: TUNE.lives,
-  time: 0,
-  totalTime: 0,
-  everDetected: false,
-  banner: '',
-  bannerTimer: 0,
-  hintTimer: 0,
-  paused: false,
-  shotMode: false,
-  levelStartScore: 0,
-};
+const params = new URLSearchParams(window.location.search);
+const seed = parseInt(params.get('seed') || '1', 10) || 1;
+const shot = params.get('shot');
+const live = params.get('live') === '1';
 
-const input = makeInput();
-const audio = makeAudio();
-const ui = makeUI();
-state.ui = ui;
+const input = createInput();
 
-function loadLevel(index) {
-  const def = LEVELS[index];
-  state.levelIndex = index;
-  // Deep-copy level data so restarts are clean.
-  state.level = JSON.parse(JSON.stringify(def));
-  state.level.walls = def.walls.map((w) => ({ ...w }));
-  state.level.cover = def.cover.map((c) => ({ ...c }));
-  state.level.loot = def.loot.map((l) => ({ ...l, taken: false }));
-  state.player = makePlayer(def.start);
-  state.guards = def.guards.map(makeGuard);
-  if (def.dog) state.guards.push(makeDog(def.dog));
-  state.cameras = def.cameras.map(makeCamera);
-  state.lasers = def.lasers.map(makeLaser);
-  state.coin = null;
-  state.coinSpot = null;
-  state.alarm = 0;
-  state.maxDetection = 0;
-  state.lootGot = 0;
-  state.time = 0;
-  state.everDetected = false;
-  state.banner = '';
-  state.bannerTimer = 0;
-  state.hintTimer = 0;
-  state.levelStartScore = state.score;
-}
-state.loadLevel = loadLevel;
-
-function solids() {
-  return [...state.level.walls, ...state.level.cover];
+function freshState(levelIndex) {
+  const def = levelByIndex(levelIndex);
+  return {
+    screen: 'title', // title | play | levelComplete | gameComplete | gameOver
+    levelIndex,
+    levelDef: def,
+    world: buildWorld(def),
+    guards: createGuards(def),
+    cameras: createCameras(def),
+    lasers: createLasers(def),
+    loot: def.loot.map((l) => ({ ...l, taken: false })),
+    player: createPlayer(def),
+    time: 0,
+    levelTime: 0,
+    score: 0,
+    scoreAtLevelStart: 0,
+    lives: TUNING.maxLives,
+    alarm: 0,
+    lootGot: 0,
+    exitOpen: false,
+    coins: 3,
+    smokesLeft: 2,
+    empsLeft: 1,
+    hints: 3,
+    hintT: 0,
+    empUntil: 0,
+    smokes: [],
+    coinFx: [],
+    noises: [],
+    events: [],
+    message: '',
+    messageT: 0,
+    ghost: true,
+    ghostFloors: 0,
+    totalLoot: 0,
+    paused: false,
+    caughtT: 0,
+    levelResult: null,
+    demo: false,
+    seed,
+  };
 }
 
-function blockers() {
-  return solids();
+let state = freshState(0);
+
+function startLevel(levelIndex, keepScore) {
+  const score = keepScore ? state.score : 0;
+  const lives = state.lives;
+  const ghostFloors = state.ghostFloors;
+  const totalLoot = state.totalLoot;
+  state = freshState(levelIndex);
+  state.score = score;
+  state.scoreAtLevelStart = score;
+  state.lives = lives;
+  state.ghostFloors = ghostFloors;
+  state.totalLoot = totalLoot;
+  state.screen = 'play';
 }
 
-function setBanner(text, seconds) {
-  state.banner = text;
-  state.bannerTimer = seconds || 3;
-}
-
-function onCaught() {
-  if (state.screen !== 'playing') return;
+function restartLevelAfterCaught() {
   state.lives -= 1;
-  audio.caught();
   if (state.lives <= 0) {
-    state.screen = 'complete';
-    ui.showComplete(state.score, state.totalTime + state.time);
+    state.screen = 'gameOver';
+    sfx.caught();
     return;
   }
-  state.screen = 'caught';
-  ui.showCaught(state.lives);
+  const idx = state.levelIndex;
+  const score = state.scoreAtLevelStart;
+  const ghostFloors = state.ghostFloors;
+  const totalLoot = state.totalLoot;
+  const lives = state.lives;
+  state = freshState(idx);
+  state.score = score;
+  state.scoreAtLevelStart = score;
+  state.lives = lives;
+  state.ghostFloors = ghostFloors;
+  state.totalLoot = totalLoot;
+  state.screen = 'play';
+  state.message = 'CAUGHT — FLOOR RESET, ' + lives + (lives === 1 ? ' FOX' : ' FOXES') + ' LEFT';
+  state.messageT = 2.5;
 }
 
-function completeLevel() {
-  const level = state.level;
-  const timeBonus = Math.max(0, Math.round((level.par - state.time) * 10));
-  const ghostBonus = state.everDetected ? 0 : 500;
-  const lootBonus = state.lootGot * 200;
-  const levelScore = timeBonus + ghostBonus + lootBonus;
-  const stars = levelScore >= 900 ? 3 : levelScore >= 500 ? 2 : 1;
-  state.score += levelScore;
-  state.totalTime += state.time;
-  audio.win();
-  state.screen = 'leveldone';
-  ui.showLevelComplete(state.levelIndex, {
-    stars, time: state.time, par: level.par,
-    timeBonus, ghostBonus, lootBonus, levelScore,
-  });
+function finishLevel() {
+  const timeBonus = Math.max(0, Math.round((state.levelDef.parSeconds - state.levelTime) * TUNING.timeBonusPerSecond));
+  const ghostBonus = state.ghost ? TUNING.ghostBonus : 0;
+  const lootScore = state.loot.reduce((s, l) => s + l.value, 0);
+  const total = lootScore + timeBonus + ghostBonus;
+  const stars = state.ghost && state.levelTime < state.levelDef.parSeconds ? 3
+    : state.ghost || state.levelTime < state.levelDef.parSeconds * 1.3 ? 2 : 1;
+  state.levelResult = { stars, lootScore, time: state.levelTime, timeBonus, ghostBonus, ghost: state.ghost, total };
+  state.score += timeBonus + ghostBonus;
+  if (state.ghost) state.ghostFloors += 1;
+  state.totalLoot += state.loot.length;
+  state.screen = 'levelComplete';
+  sfx.win();
 }
 
-function nextLevel() {
-  if (state.levelIndex + 1 >= LEVELS.length) {
-    state.screen = 'complete';
-    ui.showComplete(state.score, state.totalTime);
-    return;
+function handleEvents() {
+  for (const ev of state.events) {
+    if (ev.type === 'pickup') sfx.pickup();
+    else if (ev.type === 'coin') sfx.coin();
+    else if (ev.type === 'spotted' || ev.type === 'cameraSpot') sfx.alert();
+    else if (ev.type === 'laserTrip') sfx.laser();
+    else if (ev.type === 'smoke') sfx.smoke();
+    else if (ev.type === 'emp') sfx.emp();
+    else if (ev.type === 'denied') { sfx.denied(); state.message = ev.what; state.messageT = 1.6; }
+    else if (ev.type === 'step') sfx.step();
+    else if (ev.type === 'exitOpen') { state.message = 'EXIT OPEN — REACH THE GETAWAY VAN!'; state.messageT = 2.5; }
   }
-  loadLevel(state.levelIndex + 1);
-  state.screen = 'playing';
-  ui.hideScreens();
-  setBanner(state.level.name + ' — ' + state.level.sub, 4);
+  state.events.length = 0;
 }
 
 function update(dt) {
-  if (state.screen !== 'playing' || state.paused) return;
-  const p = state.player;
-  const level = state.level;
+  if (state.demo) return; // frozen demo frame: time never advances, pixels are identical
   state.time += dt;
-
-  // Player movement + footsteps.
-  const wasMoving = p.moving;
-  updatePlayer(p, dt, input, solids());
-  clampToWorld(p, WORLD_W, WORLD_H);
-  if (p.moving) {
-    p.stepTimer -= dt;
-    if (p.stepTimer <= 0) {
-      p.stepTimer = p.sneaking ? 0.55 : 0.34;
-      audio.step(p.sneaking);
-    }
-  }
-  void wasMoving;
-
-  // Light pools: standing in moonlight makes the thief easier to spot.
-  p.inLight = (dist(p.x, p.y, 240, 150) < 80) || (dist(p.x, p.y, 720, 430) < 80);
-
-  // Guards.
-  let maxDet = 0;
-  let anyAlerted = false;
-  for (const g of state.guards) {
-    updateGuard(g, dt, {
-      player: p, solids: solids(), blockers: blockers(),
-      time: state.time, coinSpot: state.coinSpot, onCaught,
-    });
-    maxDet = Math.max(maxDet, g.detection);
-    if (g.state === 'alerted') anyAlerted = true;
-    if (g.detection >= 45) state.everDetected = true;
-  }
-  state.maxDetection = maxDet;
-
-  // Cameras.
-  let camSeen = 0;
-  for (const cam of state.cameras) {
-    updateCamera(cam, dt, state.time);
-    camSeen = Math.max(camSeen, cameraSeesPlayer(cam, p, blockers()));
-  }
-  if (camSeen > 0) {
-    state.alarm += TUNE.alarmCamera * camSeen * dt;
-    state.everDetected = true;
-  }
-
-  // Lasers.
-  for (const l of state.lasers) {
-    if (laserTripsPlayer(l, p, state.time)) {
-      if (!l.tripped) {
-        l.tripped = true;
-        state.alarm += TUNE.alarmLaser;
-        audio.laser();
-        setBanner('LASER TRIPPED! Alarm rising!', 2.5);
-      }
-    } else {
-      l.tripped = false;
-    }
-  }
-
-  // Alarm: climbs while seen/alerted, decays while hidden.
-  if (anyAlerted) state.alarm += TUNE.alarmOnSpot * dt;
-  else if (maxDet <= 0 && camSeen <= 0) state.alarm -= TUNE.alarmDecay * dt;
-  state.alarm = Math.max(0, Math.min(100, state.alarm));
-  if (state.alarm >= 100) { onCaught(); return; }
-
-  // Loot pickup: walk over it (or press E near it).
-  for (const l of level.loot) {
-    if (!l.taken && dist(p.x, p.y, l.x, l.y) < 24) {
-      l.taken = true;
-      state.lootGot += 1;
-      state.score += 200;
-      audio.pickup();
-      setBanner(`Lifted the ${l.label}! (${state.lootGot}/${level.loot.length})`, 2.5);
-      if (state.lootGot >= level.loot.length) {
-        audio.unlock();
-        setBanner('All loot lifted — the EXIT is open. Get out!', 4);
-      }
-    }
-  }
-
-  // Coin toss.
-  if (consumePress(input, 'KeyQ')) {
-    const coin = tossCoin(p, p.x + p.faceX * 150, p.y + p.faceY * 150);
-    if (coin) {
-      state.coin = coin;
-      audio.coin();
-      setBanner('Coin tossed — a guard will check the clink.', 2);
-    } else {
-      setBanner('Out of coins!', 1.5);
-    }
-  }
-  if (state.coin) {
-    state.coin = updateCoin(state.coin, dt);
-    if (state.coin && state.coin.landed && !state.coinSpot) {
-      state.coinSpot = { x: state.coin.x, y: state.coin.y };
-      setTimeout(() => { state.coinSpot = null; }, 2600);
-    }
-  }
-
-  // Hint.
-  if (consumePress(input, 'KeyH')) {
-    if (p.hints > 0) {
-      p.hints -= 1;
-      state.hintTimer = 3;
-      setBanner('Hint: follow the green arrow to the exit.', 2);
-    } else setBanner('No hints left.', 1.5);
-  }
-  if (state.hintTimer > 0) state.hintTimer -= dt;
-
-  // Restart / mute / pause.
-  if (consumePress(input, 'KeyR')) {
-    loadLevel(state.levelIndex);
-    setBanner('Level restarted.', 1.5);
-  }
-  if (consumePress(input, 'KeyM')) {
-    setBanner(audio.toggleMute() ? 'Muted (M to unmute).' : 'Sound on.', 1.5);
-  }
-  if (consumePress(input, 'KeyP')) {
-    state.paused = !state.paused;
-    state.screen = state.paused ? 'paused' : 'playing';
-    ui.showScreen(state.paused ? 'paused' : null);
-    if (!state.paused) ui.hideScreens();
-  }
-
-  // Exit: locked until every loot is collected.
-  const ex = level.exit;
-  if (state.lootGot >= level.loot.length &&
-    pointInRect(p.x, p.y, { x: ex.x - 6, y: ex.y - 6, w: ex.w + 12, h: ex.h + 12 })) {
-    completeLevel();
+  if (state.caughtT > 0) {
+    state.caughtT -= dt;
+    if (state.caughtT <= 0) restartLevelAfterCaught();
     return;
   }
+  if (state.screen !== 'play' || state.paused || state.demo) return;
+  state.levelTime += dt;
+  state.messageT = Math.max(0, state.messageT - dt);
+  state.hintT = Math.max(0, state.hintT - dt);
 
-  if (state.bannerTimer > 0) {
-    state.bannerTimer -= dt;
-    if (state.bannerTimer <= 0) state.banner = '';
+  updatePlayer(state, dt, state.world, input);
+  updateGuards(state, dt, state.world);
+  updateCameras(state, dt, state.world);
+  updateLasers(state, dt, state.world);
+  updateTools(state, dt);
+
+  // Alarm decays slowly while nobody sees the Fox.
+  const anyoneSees = state.guards.some((gd) => gd.detect > 0.05)
+    || state.cameras.some((c) => c.spot > 0.05);
+  if (!anyoneSees && state.alarm > 0) {
+    state.alarm = Math.max(0, state.alarm - TUNING.alarmDecayPerSecond * dt);
   }
 
-  ui.update(state);
+  // Exit: reach the van once every loot is pocketed.
+  if (state.exitOpen) {
+    const e = state.world.exit;
+    const p = state.player;
+    if (Math.hypot(p.x - e.x, p.y - e.y) < 52) finishLevel();
+  }
+
+  // Alarm full = caught. Fair: the meter fills over seconds, never instantly.
+  if (state.alarm >= 100) {
+    state.alarm = 100;
+    state.caughtT = 1.6;
+    sfx.caught();
+  }
+  handleEvents();
 }
 
-function loop(t) {
-  requestAnimationFrame(loop);
-  const now = t / 1000;
-  const dt = Math.min(0.05, now - (loop.last || now));
-  loop.last = now;
-  if (!state.shotMode) update(dt);
-  if (state.screen === 'playing' || state.screen === 'paused' || state.screen === 'leveldone' || state.screen === 'caught' || state.screen === 'complete') {
-    render(ctx, state, state.time + now * 0.001);
-    if (state.screen !== 'playing') ui.update(state);
-  }
-  // Title screen: draw the level behind the title overlay.
+function render() {
+  g.clearRect(0, 0, VIEW_W, VIEW_H);
   if (state.screen === 'title') {
-    render(ctx, state, now);
+    // Title over a live view of floor 1 so the game shows through.
+    drawGame(g, state);
+    drawTitle(g, state);
+    return;
+  }
+  drawGame(g, state);
+  if (state.screen === 'play') {
+    drawHUD(g, state);
+    drawCaughtFlash(g, state);
+    if (state.paused) drawPaused(g);
+  } else if (state.screen === 'levelComplete') {
+    drawLevelComplete(g, state);
+  } else if (state.screen === 'gameComplete') {
+    drawGameComplete(g, state);
+  } else if (state.screen === 'gameOver') {
+    drawGameOver(g, state);
   }
 }
 
-// Buttons + Enter handling.
-function wireButtons() {
-  const startBtn = document.getElementById('btn-start');
-  const againBtn = document.getElementById('btn-again');
-  const nextBtn = document.getElementById('btn-next');
-  const retryBtn = document.getElementById('btn-retry');
-  const resumeBtn = document.getElementById('btn-resume');
-  if (startBtn) startBtn.addEventListener('click', startGame);
-  if (againBtn) againBtn.addEventListener('click', () => { resetGame(); startGame(); });
-  if (nextBtn) nextBtn.addEventListener('click', nextLevel);
-  if (retryBtn) retryBtn.addEventListener('click', () => {
-    loadLevel(state.levelIndex);
-    state.screen = 'playing';
-    ui.hideScreens();
-  });
-  if (resumeBtn) resumeBtn.addEventListener('click', () => {
-    state.paused = false;
-    state.screen = 'playing';
-    ui.hideScreens();
-  });
-}
-
-function startGame() {
-  audio.ensure();
-  loadLevel(state.levelIndex);
-  state.screen = 'playing';
-  ui.hideScreens();
-  setBanner(state.level.name + ' — ' + state.level.sub, 4);
-}
-
-function resetGame() {
-  state.score = 0;
-  state.lives = TUNE.lives;
-  state.totalTime = 0;
-  state.levelIndex = 0;
-}
-
-bindInput(input, (code) => {
-  if (code === 'Enter') {
-    if (state.screen === 'title') startGame();
-    else if (state.screen === 'leveldone') nextLevel();
-    else if (state.screen === 'caught') {
-      loadLevel(state.levelIndex);
-      state.screen = 'playing';
-      ui.hideScreens();
-    } else if (state.screen === 'complete') {
-      resetGame();
-      startGame();
+function onAction(code) {
+  sfx.unlock();
+  if (code === 'KeyM') {
+    const m = sfx.toggleMute();
+    state.message = m ? 'SOUND OFF' : 'SOUND ON';
+    state.messageT = 1.2;
+    return;
+  }
+  if (state.screen === 'title') {
+    if (code === 'Enter' || code === 'Space') startLevel(0, false);
+    return;
+  }
+  if (state.screen === 'levelComplete') {
+    if (code === 'Enter' || code === 'Space') {
+      if (state.levelIndex + 1 < 3) startLevel(state.levelIndex + 1, true);
+      else state.screen = 'gameComplete';
     }
+    return;
+  }
+  if (state.screen === 'gameComplete' || state.screen === 'gameOver') {
+    if (code === 'Enter' || code === 'Space') {
+      state.lives = TUNING.maxLives;
+      state.ghostFloors = 0;
+      state.totalLoot = 0;
+      startLevel(0, false);
+    }
+    return;
+  }
+  // In play.
+  if (code === 'KeyP') { state.paused = !state.paused; return; }
+  if (state.paused) return;
+  if (code === 'KeyR') { startLevel(state.levelIndex, true); state.score = state.scoreAtLevelStart; return; }
+  if (code === 'KeyQ') throwCoin(state);
+  else if (code === 'KeyF') dropSmoke(state);
+  else if (code === 'KeyE') triggerEMP(state);
+  else if (code === 'KeyH') {
+    if (state.hints > 0) { state.hints -= 1; state.hintT = 3; }
+    else { state.message = 'NO HINTS LEFT'; state.messageT = 1.4; }
+  }
+}
+
+input.setKeyHandler(onAction);
+canvas.addEventListener('click', () => {
+  sfx.unlock();
+  if (state.screen === 'title') startLevel(0, false);
+  else if (state.screen === 'levelComplete') {
+    if (state.levelIndex + 1 < 3) startLevel(state.levelIndex + 1, true);
+    else state.screen = 'gameComplete';
+  } else if (state.screen === 'gameComplete' || state.screen === 'gameOver') {
+    state.lives = TUNING.maxLives;
+    startLevel(0, false);
   }
 });
 
-// Debug / play-test hook: real game state, readable from the browser.
-window.__heist = {
-  state,
-  startGame,
-  loadLevel,
-  nextLevel,
-  resetGame,
-};
-
-// Boot: load level 1 behind the title screen, then apply ?shot= states.
-loadLevel(0);
-state.screen = 'title';
-ui.showScreen('title');
-wireButtons();
-const params = new URLSearchParams(window.location.search);
-const shot = params.get('shot');
+// Demo screenshot states: frozen, deterministic, rendered by the real game.
 if (shot) {
-  state.shotMode = true;
-  applyShot(state, shot, parseInt(params.get('seed') || '1', 10));
-  ui.hideScreens();
-  if (shot === 'end') ui.showScreen('level');
-  else if (shot === 'start') ui.showScreen('title');
-  ui.update(state);
+  applyShot(state, shot, seed);
+  if (live) state.demo = false;
+  if (shot === 'play' || shot === 'play2') state.screen = 'play';
 }
-requestAnimationFrame(loop);
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  update(dt);
+  render();
+  input.endFrame();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// Test hook: the play-test reads live state through this, nothing else uses it.
+window.__fox = {
+  get state() { return state; },
+  startLevel(i) { startLevel(i, false); },
+  get screen() { return state.screen; },
+};

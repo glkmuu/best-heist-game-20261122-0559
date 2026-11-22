@@ -1,70 +1,152 @@
-// world.js — map geometry: collision and real line-of-sight.
-// Walls and cover are axis-aligned rects. A sight line is blocked if the
-// segment between two points touches any wall or cover rect.
+// world.js — the museum floor: walls, cover, line of sight, shadow and vents.
+// One job: geometry. Nothing here knows about guards, cameras or the player.
+import { VIEW_W, VIEW_H, HUD_H } from './config.js';
 
-export function rectsCollide(ax, ay, r, rect) {
-  return ax + r > rect.x && ax - r < rect.x + rect.w &&
-    ay + r > rect.y && ay - r < rect.y + rect.h;
+export const PLAY = { x: 8, y: HUD_H + 8, w: VIEW_W - 16, h: VIEW_H - HUD_H - 16 };
+
+export function buildWorld(def) {
+  return {
+    def,
+    solids: def.walls.slice(),
+    shadows: (def.shadows || []).slice(),
+    vents: (def.vents || []).slice(),
+    exit: def.exit,
+  };
 }
 
-export function pointInRect(x, y, rect) {
-  return x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h;
+export function pointInRect(x, y, r) {
+  return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
 }
 
-// Move a circle (x,y,r) by (dx,dy), sliding along solid rects. Returns new pos.
-export function moveWithCollision(x, y, r, dx, dy, solids) {
-  let nx = x + dx;
-  for (const s of solids) {
-    if (rectsCollide(nx, y, r, s)) {
-      nx = dx > 0 ? s.x - r : dx < 0 ? s.x + s.w + r : nx;
-      if (rectsCollide(nx, y, r, s)) nx = x;
+export function circleHitsRect(cx, cy, r, rect) {
+  const nx = Math.max(rect.x, Math.min(cx, rect.x + rect.w));
+  const ny = Math.max(rect.y, Math.min(cy, rect.y + rect.h));
+  const dx = cx - nx;
+  const dy = cy - ny;
+  return dx * dx + dy * dy < r * r;
+}
+
+// Push a circle out of every solid it overlaps. Returns true when it moved.
+export function resolveCircle(world, ent) {
+  let moved = false;
+  for (const s of world.solids) {
+    if (!circleHitsRect(ent.x, ent.y, ent.r, s)) continue;
+    const nx = Math.max(s.x, Math.min(ent.x, s.x + s.w));
+    const ny = Math.max(s.y, Math.min(ent.y, s.y + s.h));
+    let dx = ent.x - nx;
+    let dy = ent.y - ny;
+    let d = Math.hypot(dx, dy);
+    if (d < 0.001) {
+      // Centre inside the rect: push out along the smallest penetration axis.
+      const left = ent.x - s.x;
+      const right = s.x + s.w - ent.x;
+      const top = ent.y - s.y;
+      const bottom = s.y + s.h - ent.y;
+      const m = Math.min(left, right, top, bottom);
+      if (m === left) { ent.x = s.x - ent.r; }
+      else if (m === right) { ent.x = s.x + s.w + ent.r; }
+      else if (m === top) { ent.y = s.y - ent.r; }
+      else { ent.y = s.y + s.h + ent.r; }
+    } else {
+      dx /= d; dy /= d;
+      ent.x = nx + dx * ent.r;
+      ent.y = ny + dy * ent.r;
     }
+    moved = true;
   }
-  let ny = y + dy;
-  for (const s of solids) {
-    if (rectsCollide(nx, ny, r, s)) {
-      ny = dy > 0 ? s.y - r : dy < 0 ? s.y + s.h + r : ny;
-      if (rectsCollide(nx, ny, r, s)) ny = y;
+  const p = PLAY;
+  if (ent.x < p.x + ent.r) { ent.x = p.x + ent.r; moved = true; }
+  if (ent.x > p.x + p.w - ent.r) { ent.x = p.x + p.w - ent.r; moved = true; }
+  if (ent.y < p.y + ent.r) { ent.y = p.y + ent.r; moved = true; }
+  if (ent.y > p.y + p.h - ent.r) { ent.y = p.y + p.h - ent.r; moved = true; }
+  return moved;
+}
+
+// Move a circle with axis separation so it slides along walls.
+export function moveCircle(world, ent, dx, dy) {
+  ent.x += dx;
+  resolveCircle(world, ent);
+  ent.y += dy;
+  resolveCircle(world, ent);
+}
+
+// Liang-Barsky: does segment (x1,y1)-(x2,y2) cross rect r?
+export function segmentHitsRect(x1, y1, x2, y2, r) {
+  let t0 = 0;
+  let t1 = 1;
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const p = [-dx, dx, -dy, dy];
+  const q = [x1 - r.x, r.x + r.w - x1, y1 - r.y, r.y + r.h - y1];
+  for (let i = 0; i < 4; i++) {
+    if (p[i] === 0) {
+      if (q[i] < 0) return false;
+    } else {
+      const t = q[i] / p[i];
+      if (p[i] < 0) {
+        if (t > t1) return false;
+        if (t > t0) t0 = t;
+      } else {
+        if (t < t0) return false;
+        if (t < t1) t1 = t;
+      }
     }
-  }
-  return { x: nx, y: ny };
-}
-
-// Segment (x1,y1)-(x2,y2) vs rect: true when the segment touches the rect.
-export function segmentHitsRect(x1, y1, x2, y2, rect) {
-  if (pointInRect(x1, y1, rect) || pointInRect(x2, y2, rect)) return true;
-  const edges = [
-    [rect.x, rect.y, rect.x + rect.w, rect.y],
-    [rect.x + rect.w, rect.y, rect.x + rect.w, rect.y + rect.h],
-    [rect.x + rect.w, rect.y + rect.h, rect.x, rect.y + rect.h],
-    [rect.x, rect.y + rect.h, rect.x, rect.y],
-  ];
-  for (const [ax, ay, bx, by] of edges) {
-    if (segmentsIntersect(x1, y1, x2, y2, ax, ay, bx, by)) return true;
-  }
-  return false;
-}
-
-export function segmentsIntersect(x1, y1, x2, y2, x3, y3, x4, y4) {
-  const d1 = (x4 - x3) * (y1 - y3) - (y4 - y3) * (x1 - x3);
-  const d2 = (x4 - x3) * (y2 - y3) - (y4 - y3) * (x2 - x3);
-  const d3 = (x2 - x1) * (y3 - y1) - (y2 - y1) * (x3 - x1);
-  const d4 = (x2 - x1) * (y4 - y1) - (y2 - y1) * (x4 - x1);
-  return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
-    ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
-}
-
-// True line of sight: no wall or cover rect between (x1,y1) and (x2,y2).
-export function hasLineOfSight(x1, y1, x2, y2, blockers) {
-  for (const b of blockers) {
-    if (segmentHitsRect(x1, y1, x2, y2, b)) return false;
   }
   return true;
 }
 
-// Angle from (x1,y1) to (x2,y2), and angular difference wrapped to [-PI, PI].
-export function angleTo(x1, y1, x2, y2) {
-  return Math.atan2(y2 - y1, x2 - x1);
+// True when nothing solid stands between the two points.
+export function lineOfSight(world, x1, y1, x2, y2) {
+  for (const s of world.solids) {
+    if (segmentHitsRect(x1, y1, x2, y2, s)) return false;
+  }
+  return true;
+}
+
+// Does segment (x1,y1)-(x2,y2) pass through circle (cx,cy,r)?
+export function segmentHitsCircle(x1, y1, x2, y2, cx, cy, r) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 === 0 ? 0 : ((cx - x1) * dx + (cy - y1) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const px = x1 + t * dx;
+  const py = y1 + t * dy;
+  const ddx = px - cx;
+  const ddy = py - cy;
+  return ddx * ddx + ddy * ddy < r * r;
+}
+
+export function distanceToSegment(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 === 0 ? 0 : ((px - x1) * dx + (py - y1) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const qx = x1 + t * dx;
+  const qy = y1 + t * dy;
+  return Math.hypot(px - qx, py - qy);
+}
+
+export function inShadow(world, x, y) {
+  for (const s of world.shadows) if (pointInRect(x, y, s)) return true;
+  return false;
+}
+
+export function inVent(world, x, y) {
+  for (const v of world.vents) if (pointInRect(x, y, v)) return true;
+  return false;
+}
+
+// Deterministic PRNG so a seed always rebuilds the same floor dressing.
+export function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function next() {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
 export function angleDiff(a, b) {
@@ -72,21 +154,4 @@ export function angleDiff(a, b) {
   while (d > Math.PI) d -= Math.PI * 2;
   while (d < -Math.PI) d += Math.PI * 2;
   return d;
-}
-
-export function dist(x1, y1, x2, y2) {
-  return Math.hypot(x2 - x1, y2 - y1);
-}
-
-export function clamp(v, lo, hi) {
-  return v < lo ? lo : v > hi ? hi : v;
-}
-
-// Distance from point (px,py) to segment (x1,y1)-(x2,y2).
-export function pointSegmentDist(px, py, x1, y1, x2, y2) {
-  const dx = x2 - x1, dy = y2 - y1;
-  const len2 = dx * dx + dy * dy;
-  let t = len2 === 0 ? 0 : ((px - x1) * dx + (py - y1) * dy) / len2;
-  t = clamp(t, 0, 1);
-  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
 }

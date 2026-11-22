@@ -1,121 +1,143 @@
-// guards.js — guard patrol, vision cones, and AI states.
-// States: calm (patrol waypoints) -> suspicious (walk to last seen spot,
-// look around) -> alerted (chase the thief, alarm climbs). A guard only
-// sees the thief when the thief is inside its cone AND line of sight is
-// clear — walls and cover really block vision. Running is loud: guards
-// investigate noise. The level-3 dog hears running from far away.
+// guards.js — patrol, vision cone and the CALM -> SUSPICIOUS -> ALERTED brain.
+// One job: guard AI. Nothing here draws anything.
+import { TUNING } from './config.js';
+import { lineOfSight, segmentHitsCircle, inShadow, inVent, angleDiff } from './world.js';
 
-import { TUNE } from './config.js';
-import { angleDiff, angleTo, clamp, dist, hasLineOfSight, moveWithCollision } from './world.js';
-
-export function makeGuard(def) {
-  return {
-    kind: 'guard',
-    x: def.x, y: def.y,
-    waypoints: def.waypoints,
-    wpIndex: 1,
-    speed: def.speed,
-    range: def.range,
-    fov: def.fov,
-    angle: angleTo(def.x, def.y, def.waypoints[1][0], def.waypoints[1][1]),
-    state: 'calm',
-    detection: 0,          // 0..100, per-guard suspicion of the thief
-    lastSeen: null,        // {x,y} where the thief was last spotted
-    lookTimer: 0,
-    investigate: null,     // {x,y} noise / coin spot to check
-    pauseTimer: 0,
-    stuckTimer: 0,
-  };
+export function createGuards(def) {
+  return def.guards.map((g, i) => {
+    const start = g.waypoints[0];
+    return {
+      id: i,
+      x: start[0],
+      y: start[1],
+      r: TUNING.guardRadius,
+      waypoints: g.waypoints,
+      wpIndex: 1 % g.waypoints.length,
+      speed: g.speed,
+      dog: !!g.dog,
+      state: 'CALM', // CALM | SUSPICIOUS | ALERTED
+      dir: 0,
+      detect: 0, // 0..1 detection meter; 1 = spotted the Fox
+      investigate: null, // { x, y } point to walk to and look around
+      waitT: 0,
+      lostT: 0,
+      chaseT: 0,
+      hearT: 0,
+    };
+  });
 }
 
-export function makeDog(def) {
-  const g = makeGuard(def);
-  g.kind = 'dog';
-  g.hearRadius = def.hearRadius;
-  g.speed = def.speed;
-  return g;
+function guardSeesPlayer(guard, player, world, state) {
+  if (player.dead) return { seen: false, rate: 0 };
+  const dx = player.x - guard.x;
+  const dy = player.y - guard.y;
+  const d = Math.hypot(dx, dy);
+  const range = guard.dog ? TUNING.guardConeRange * 0.9 : TUNING.guardConeRange;
+  if (d > range) return { seen: false, rate: 0 };
+  const ang = Math.atan2(dy, dx);
+  if (Math.abs(angleDiff(ang, guard.dir)) > TUNING.guardConeHalfAngle) {
+    return { seen: false, rate: 0 };
+  }
+  if (!lineOfSight(world, guard.x, guard.y, player.x, player.y)) {
+    return { seen: false, rate: 0 };
+  }
+  // Smoke blocks sight: a cloud between guard and player hides the Fox.
+  for (const c of state.smokes) {
+    if (segmentHitsCircle(guard.x, guard.y, player.x, player.y, c.x, c.y, c.r)) {
+      return { seen: false, rate: 0 };
+    }
+  }
+  // Inside a vent the Fox is out of every cone.
+  if (inVent(world, player.x, player.y)) return { seen: false, rate: 0 };
+  // Detection fills in ~2.5s at point blank, slower far away / sneaking / in shadow.
+  let rate = 1 / TUNING.detectFillSeconds;
+  rate *= 1 + (1 - d / range) * 1.0;
+  if (player.mode === 'run') rate *= 1.6;
+  else if (player.mode === 'sneak') rate *= 0.55;
+  rate *= inShadow(world, player.x, player.y) ? 0.7 : 1.3;
+  if (guard.dog && player.mode === 'run') rate *= 1.5; // the hound hears running
+  return { seen: true, rate };
 }
 
-// Can this guard see the player right now? Returns 0..1 visibility strength.
-export function guardSeesPlayer(g, player, blockers) {
-  const d = dist(g.x, g.y, player.x, player.y);
-  if (d > g.range) return 0;
-  const diff = Math.abs(angleDiff(angleTo(g.x, g.y, player.x, player.y), g.angle));
-  if (diff > g.fov) return 0;
-  if (!hasLineOfSight(g.x, g.y, player.x, player.y, blockers)) return 0;
-  // Closer + running + standing in light = easier to spot. Sneaking shrinks it.
-  let vis = 1 - (d / g.range) * TUNE.detectFalloff;
-  if (player.sneaking) vis *= 0.45;
-  if (player.running) vis *= 1.5;
-  if (player.inLight) vis *= 1.3;
-  return clamp(vis, 0.08, 1);
-}
-
-function walkToward(g, tx, ty, speed, dt, solids) {
-  const d = dist(g.x, g.y, tx, ty);
+function walkToward(guard, tx, ty, speed, dt, world) {
+  const dx = tx - guard.x;
+  const dy = ty - guard.y;
+  const d = Math.hypot(dx, dy);
   if (d < 4) return true;
   const step = Math.min(d, speed * dt);
-  const nx = g.x + ((tx - g.x) / d) * step;
-  const ny = g.y + ((ty - g.y) / d) * step;
-  const pos = moveWithCollision(g.x, g.y, TUNE.guardRadius, nx - g.x, ny - g.y, solids);
-  g.angle = angleTo(g.x, g.y, pos.x, pos.y);
-  g.x = pos.x; g.y = pos.y;
-  return dist(g.x, g.y, tx, ty) < 6;
+  guard.dir = Math.atan2(dy, dx);
+  guard.x += (dx / d) * step;
+  guard.y += (dy / d) * step;
+  return d - step < 4;
 }
 
-export function updateGuard(g, dt, ctx) {
-  const { player, solids, blockers, time } = ctx;
-  const seen = guardSeesPlayer(g, player, blockers);
-  if (seen > 0) {
-    g.detection = clamp(g.detection + TUNE.detectBase * seen * dt, 0, 100);
-    g.lastSeen = { x: player.x, y: player.y };
-    if (g.detection >= 100) g.state = 'alerted';
-    else if (g.detection >= 45) g.state = 'suspicious';
-  } else {
-    g.detection = clamp(g.detection - 14 * dt, 0, 100);
-    if (g.state === 'alerted' && g.detection < 25) g.state = 'suspicious';
-    else if (g.state === 'suspicious' && g.detection <= 0 && !g.investigate) g.state = 'calm';
-  }
+export function updateGuards(state, dt, world) {
+  const player = state.player;
+  for (const g of state.guards) {
+    const see = guardSeesPlayer(g, player, world, state);
 
-  // Hearing: running footsteps and coin clinks pull guards over.
-  const pd = dist(g.x, g.y, player.x, player.y);
-  const hearR = g.kind === 'dog' ? g.hearRadius : TUNE.runNoiseRadius;
-  if (player.running && pd < hearR && g.state === 'calm') {
-    g.investigate = { x: player.x, y: player.y };
-    g.state = 'suspicious';
-  }
-  if (ctx.coinSpot && g.state !== 'alerted') {
-    const cd = dist(g.x, g.y, ctx.coinSpot.x, ctx.coinSpot.y);
-    if (cd < 320) { g.investigate = { x: ctx.coinSpot.x, y: ctx.coinSpot.y }; g.state = 'suspicious'; }
-  }
-
-  if (g.state === 'alerted') {
-    // Chase the thief. Catching = alarm full (handled by main via alarm).
-    walkToward(g, player.x, player.y, TUNE.guardChaseSpeed, dt, solids);
-    if (pd < 26) ctx.onCaught && ctx.onCaught(g);
-  } else if (g.state === 'suspicious') {
-    const target = g.investigate || g.lastSeen;
-    if (target) {
-      const arrived = walkToward(g, target.x, target.y, TUNE.guardSearchSpeed, dt, solids);
-      if (arrived) {
-        g.investigate = null;
-        g.lookTimer += dt;
-        g.angle += Math.sin(time * 1.6) * 1.4 * dt; // scan the area
-        if (g.lookTimer > 2.4) { g.lookTimer = 0; g.state = 'calm'; g.lastSeen = null; }
+    if (see.seen) {
+      g.detect = Math.min(1, g.detect + see.rate * dt);
+      g.lastSeen = { x: player.x, y: player.y };
+      g.lostT = 0;
+      if (g.detect >= 1 && g.state !== 'ALERTED') {
+        g.state = 'ALERTED';
+        g.chaseT = 0;
+        state.alarm = Math.min(100, state.alarm + TUNING.alarmOnSpotted);
+        state.ghost = false;
+        state.events.push({ type: 'spotted', guard: g.id });
       }
     } else {
-      g.state = 'calm';
+      g.detect = Math.max(0, g.detect - dt * 0.45);
+      g.lostT += dt;
     }
-  } else {
-    // Calm: patrol the waypoint loop, pausing briefly at each corner.
-    if (g.pauseTimer > 0) {
-      g.pauseTimer -= dt;
-    } else {
-      const [wx, wy] = g.waypoints[g.wpIndex];
-      const arrived = walkToward(g, wx, wy, g.speed, dt, solids);
-      if (arrived) {
+
+    // Hearing: running feet and coin clinks pull guards over to look.
+    for (const n of state.noises) {
+      const d = Math.hypot(n.x - g.x, n.y - g.y);
+      if (d < n.radius && g.state === 'CALM') {
+        g.state = 'SUSPICIOUS';
+        g.investigate = { x: n.x, y: n.y };
+        g.waitT = 0;
+      }
+    }
+
+    if (g.state === 'CALM') {
+      const wp = g.waypoints[g.wpIndex];
+      if (walkToward(g, wp[0], wp[1], g.speed, dt, world)) {
         g.wpIndex = (g.wpIndex + 1) % g.waypoints.length;
-        g.pauseTimer = 0.7;
+      }
+    } else if (g.state === 'SUSPICIOUS') {
+      if (g.investigate) {
+        const arrived = walkToward(g, g.investigate.x, g.investigate.y, g.speed * 1.15, dt, world);
+        if (arrived) {
+          g.waitT += dt;
+          g.dir += dt * 1.8; // scan the room
+          if (g.waitT > 2.2) {
+            g.state = 'CALM';
+            g.investigate = null;
+            g.waitT = 0;
+          }
+        }
+      } else {
+        g.state = 'CALM';
+      }
+    } else if (g.state === 'ALERTED') {
+      g.chaseT += dt;
+      const target = see.seen ? { x: player.x, y: player.y } : g.lastSeen;
+      if (target) walkToward(g, target.x, target.y, g.speed * 1.55, dt, world);
+      if (see.seen) {
+        state.alarm = Math.min(100, state.alarm + TUNING.alarmOnChase * dt);
+      }
+      // Lost the Fox for a while: fall back to searching the last seen spot.
+      if (!see.seen && g.lostT > 2.5) {
+        g.state = 'SUSPICIOUS';
+        g.investigate = g.lastSeen ? { x: g.lastSeen.x, y: g.lastSeen.y } : { x: g.x, y: g.y };
+        g.waitT = 0;
+      }
+      // Caught by touch.
+      if (Math.hypot(player.x - g.x, player.y - g.y) < player.r + g.r - 2) {
+        state.alarm = 100;
       }
     }
   }

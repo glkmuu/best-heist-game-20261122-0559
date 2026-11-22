@@ -1,49 +1,34 @@
-/* styles.css — night-heist look: dark navy, gold loot, red alarm. */
+/* styles.css — page chrome for THE GILDED FOX. The game itself is canvas. */
 * { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; background: #0b0a12; color: #e8e4d8;
-  font-family: Georgia, 'Times New Roman', serif; }
-#wrap { max-width: 1280px; margin: 0 auto; padding: 10px 16px 16px; }
-#hud { display: flex; justify-content: space-between; align-items: center; gap: 12px;
-  background: #14121f; border: 1px solid #3a3348; border-radius: 8px;
-  padding: 8px 14px; font-size: 15px; flex-wrap: wrap; }
-#game-title { color: #ffd700; font-weight: bold; letter-spacing: 2px; margin-right: 10px; }
-#level-name { color: #b9b2c9; }
-.hud-mid, .hud-right { display: flex; align-items: center; gap: 14px; }
-#loot-count { color: #ffd700; font-weight: bold; }
-.meter { display: flex; align-items: center; gap: 6px; }
-.meter-label { font-size: 12px; letter-spacing: 1px; color: #cfc8de; min-width: 74px; }
-.bar { display: inline-block; width: 130px; height: 12px; background: #241f33;
-  border: 1px solid #4a4260; border-radius: 6px; overflow: hidden; vertical-align: middle; }
-.fill { display: block; height: 100%; width: 0%; transition: width 0.15s linear; }
-.fill.ok { background: #3fae5a; }
-.fill.warn { background: #ffb020; }
-.fill.danger { background: #ff4040; }
-.fill.eye { background: #ffd23f; }
-#timer { color: #9fd4ff; font-variant-numeric: tabular-nums; }
-#score { color: #e8e4d8; }
-#lives { color: #ff5a6e; letter-spacing: 2px; }
-#coins, #hints { color: #cfc8de; font-size: 13px; }
-#stage { position: relative; margin-top: 10px; }
-#game { display: block; width: 100%; height: auto; background: #1b1a26;
-  border: 1px solid #3a3348; border-radius: 8px; }
-#banner { position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
-  background: rgba(10, 8, 18, 0.88); border: 1px solid #d4af37; color: #ffe9a8;
-  padding: 6px 14px; border-radius: 20px; font-size: 14px; pointer-events: none;
-  white-space: nowrap; }
-.screen { position: absolute; inset: 0; display: flex; flex-direction: column;
-  align-items: center; justify-content: center; text-align: center;
-  background: rgba(8, 7, 14, 0.82); border-radius: 8px; padding: 20px; }
-.screen h1 { color: #ffd700; letter-spacing: 3px; margin: 0 0 10px; font-size: 40px;
-  text-shadow: 0 0 24px rgba(255, 215, 0, 0.35); }
-.screen p { max-width: 640px; line-height: 1.5; }
-.tag { color: #cfc8de; font-style: italic; }
-.howto { background: rgba(255, 215, 0, 0.07); border: 1px solid #4a4260;
-  border-radius: 8px; padding: 12px 18px; margin: 12px 0 18px; line-height: 1.7;
-  font-size: 15px; max-width: 660px; }
-button.big { background: #d4af37; color: #171208; border: none; border-radius: 8px;
-  font-family: Georgia, serif; font-size: 19px; font-weight: bold; letter-spacing: 1px;
-  padding: 12px 28px; cursor: pointer; }
-button.big:hover { background: #ffe066; }
-.dim { color: #8f88a3; font-size: 13px; }
-.hidden { display: none !important; }
-#help { text-align: center; color: #8f88a3; font-size: 13px; margin-top: 8px; }
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #0a2021;
+  color: #f3e9cf;
+  font-family: Georgia, 'Times New Roman', serif;
+}
+#stage {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px;
+}
+#game {
+  width: min(1280px, 96vw);
+  height: auto;
+  aspect-ratio: 1280 / 800;
+  border: 3px solid #d9a521;
+  outline: 1px solid rgba(255, 211, 77, 0.5);
+  outline-offset: 4px;
+  background: #f3e9cf;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.55);
+}
+#help {
+  margin: 0;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  color: #bcd8d2;
+}

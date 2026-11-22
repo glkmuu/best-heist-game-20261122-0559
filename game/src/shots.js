@@ -1,85 +1,122 @@
-// shots.js — deterministic demo states for screenshots (?shot= + &seed=).
-// These are a dev affordance inside the game itself: each shot stages a real
-// game state (title, mid-play, level 2 with lasers, level complete) so the
-// screenshots are true renders of the game's own code, reproducible by seed.
+// shots.js — deterministic demo states for the four screenshots.
+// One job: compose a frozen, reproducible frame from the real game state.
+// ?shot=start | play | play2 | end  (always with &seed=1 for screenshots)
+import { TUNING, levelByIndex } from './config.js';
+import { buildWorld } from './world.js';
+import { createGuards } from './guards.js';
+import { createCameras, createLasers } from './cameras.js';
+import { createPlayer } from './player.js';
 
-import { LEVELS } from './config.js';
-
-// Tiny seeded PRNG so shot layouts are identical every run.
-export function seededRandom(seed) {
-  let s = seed >>> 0 || 1;
-  return () => {
-    s = (s * 1664525 + 1013904223) >>> 0;
-    return s / 4294967296;
-  };
+function baseLevelState(state, levelIndex, seed) {
+  state.levelIndex = levelIndex;
+  state.levelDef = levelByIndex(levelIndex);
+  const def = state.levelDef;
+  state.world = buildWorld(def);
+  state.guards = createGuards(def);
+  state.cameras = createCameras(def);
+  state.lasers = createLasers(def);
+  state.loot = def.loot.map((l) => ({ ...l, taken: false }));
+  state.player = createPlayer(def);
+  state.time = 47.3;
+  state.levelTime = 47.3;
+  state.alarm = 0;
+  state.lootGot = 0;
+  state.exitOpen = false;
+  state.coins = 3;
+  state.smokesLeft = 2;
+  state.empsLeft = 1;
+  state.smokes = [];
+  state.coinFx = [];
+  state.noises = [];
+  state.hintT = 0;
+  state.message = '';
+  state.messageT = 0;
+  state.ghost = true;
+  state.demo = true; // frozen: the loop renders but never advances the world
+  state.seed = seed;
 }
 
+function placeGuard(g, x, y, dirDeg, detect, guardState) {
+  g.x = x;
+  g.y = y;
+  g.dir = (dirDeg * Math.PI) / 180;
+  g.detect = detect;
+  g.state = guardState;
+  if (guardState === 'SUSPICIOUS') g.investigate = { x, y };
+}
+
+// Cover shot: the Fox BIG in the middle of a bright room, three red cones,
+// one camera cone, the glowing Sunburst, alarm meter and patrol lines all in
+// one frame. Positions are fixed constants, never simulated.
 export function applyShot(state, shot, seed) {
-  const rnd = seededRandom(seed || 1);
+  state.demo = true;
   if (shot === 'start') {
     state.screen = 'title';
+    state.time = 2.0;
     return;
   }
   if (shot === 'play') {
-    // Cover: level 1, thief mid-room behind a display case, guard cones
-    // sweeping nearby, a camera cone, glowing loot, alarm part-filled.
-    state.screen = 'playing';
+    baseLevelState(state, 0, seed);
+    state.screen = 'play';
     state.levelIndex = 0;
-    state.loadLevel(0);
-    const p = state.player;
-    p.x = 470; p.y = 340; p.sneaking = true; p.faceX = 0.6; p.faceY = -0.8;
-    state.guards[0].x = 420; state.guards[0].y = 150;
-    state.guards[0].angle = 1.1;
-    state.guards[1].x = 700; state.guards[1].y = 400;
-    state.guards[1].angle = -2.2;
-    state.guards[1].state = 'suspicious';
-    state.guards[1].detection = 52;
-    state.guards[0].detection = 30;
-    state.cameras[0].angle = 1.35;
+    state.score = 320;
     state.alarm = 34;
-    state.maxDetection = 52;
-    state.lootGot = 1;
-    state.level.loot[0].taken = true;
-    state.time = 42;
-    state.score = 350;
-    state.banner = 'Stay low — the guard by the vault is suspicious.';
+    // The Fox, big and orange, centre of the room, in the open.
+    state.player.x = 640;
+    state.player.y = 500;
+    state.player.dirX = 0;
+    state.player.dirY = -1;
+    state.player.mode = 'walk';
+    // Three guards mid-patrol, cones sweeping across the room.
+    placeGuard(state.guards[0], 420, 300, 90, 0, 'CALM'); // cone down
+    placeGuard(state.guards[1], 760, 620, -90, 0.55, 'SUSPICIOUS'); // cone up, half-seen
+    placeGuard(state.guards[2], 1090, 430, 180, 0, 'CALM'); // cone left
+    // Camera cone from the top wall.
+    state.cameras[0].angle = Math.PI / 2 + 0.45;
+    state.cameras[0].spot = 0.3;
+    // A smoke cloud left of the Fox shows a tool in use.
+    state.smokes = [{ x: 480, y: 470, r: TUNING.smokeRadius, t: 2.5 }];
     return;
   }
   if (shot === 'play2') {
-    // Level 2: laser beams live, two guards, a camera, thief crawling.
-    state.screen = 'playing';
+    baseLevelState(state, 1, seed);
+    state.screen = 'play';
     state.levelIndex = 1;
-    state.loadLevel(1);
-    const p = state.player;
-    p.x = 470; p.y = 330; p.sneaking = true; p.faceX = 0; p.faceY = -1;
-    state.guards[0].x = 300; state.guards[0].y = 130; state.guards[0].angle = 0.9;
-    state.guards[1].x = 660; state.guards[1].y = 130; state.guards[1].angle = 2.2;
-    state.guards[2].x = 300; state.guards[2].y = 470; state.guards[2].angle = -0.6;
-    state.guards[3].x = 660; state.guards[3].y = 470; state.guards[3].angle = 3.4;
-    state.cameras[0].angle = 1.2;
-    state.cameras[1].angle = -1.2;
-    state.alarm = 58;
-    state.maxDetection = 70;
+    state.score = 860;
+    state.alarm = 52;
     state.lootGot = 1;
-    state.level.loot[0].taken = true;
-    state.time = 96;
-    state.score = 900;
-    state.banner = 'Lasers live! Crawl (Shift) under the red beams.';
+    state.loot[0].taken = true; // diamond already pocketed
+    state.player.x = 640;
+    state.player.y = 620;
+    state.player.dirX = 0;
+    state.player.dirY = -1;
+    state.player.mode = 'sneak';
+    placeGuard(state.guards[0], 420, 280, 90, 0, 'CALM');
+    placeGuard(state.guards[1], 900, 600, -90, 0.7, 'SUSPICIOUS');
+    state.cameras[0].angle = Math.PI / 2 - 0.5;
+    state.cameras[1].angle = Math.PI / 2 + 0.5;
+    state.cameras[1].spot = 0.45;
+    state.lasers[0].flash = 0.4; // freshly tripped beam, mid-flash
+    state.hintT = 0;
+    state.message = 'LASER TRIPPED — ALARM RISING';
+    state.messageT = 99;
     return;
   }
   if (shot === 'end') {
-    state.screen = 'leveldone';
+    baseLevelState(state, 0, seed);
+    state.screen = 'levelComplete';
     state.levelIndex = 0;
-    state.loadLevel(0);
-    state.lootGot = state.level.loot.length;
-    for (const l of state.level.loot) l.taken = true;
-    state.time = 118;
-    state.score = 1450;
-    state.ui.showLevelComplete(0, {
-      stars: 3, time: 118, par: LEVELS[0].par,
-      timeBonus: 320, ghostBonus: 500, lootBonus: 400, levelScore: 1450,
-    });
+    state.score = 1420;
+    state.levelResult = {
+      stars: 3,
+      lootScore: 800,
+      time: 47.3,
+      timeBonus: 277,
+      ghostBonus: 400,
+      ghost: true,
+      total: 1477,
+    };
     return;
   }
-  void rnd;
+  state.demo = false;
 }

@@ -4,12 +4,7 @@
 [![rank](https://make.fun/badge/best-heist-game-20261122-0559/glkmuu/best-heist-game-20261122-0559/rank.svg)](https://make.fun/bounty/best-heist-game-20261122-0559/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=best-heist-game-20261122-0559)
 [![reward](https://make.fun/badge/best-heist-game-20261122-0559/glkmuu/best-heist-game-20261122-0559/reward.svg)](https://make.fun/bounty/best-heist-game-20261122-0559?utm_source=github&utm_medium=readme&utm_campaign=best-heist-game-20261122-0559)
 
-**The Gilded Hour** — an original top-down 2D heist game. You are a thief working
-three floors of a high-rise at night: read the guards' sweeping vision cones
-(real line-of-sight, blocked by walls and cover), slip past sweeping cameras,
-crawl under laser tripwires, toss coins to pull guards away, lift every loot
-target, and slip out the exit before the alarm meter fills. Three levels, three
-lives, sneak/run movement, coin distractions, ghost bonuses and star ratings.
+**THE GILDED FOX** — a bright art-deco top-down heist game. You are the Gilded Fox, a masked thief slipping through Museum Marlowe at midnight to steal the Sunburst Diamond across 3 floors. Read the red vision cones, crawl under lasers, toss coins to pull guards away, smoke your exits and EMP the cameras — then reach the getaway van before the alarm fills. 9 guards, 3 cameras, lasers, a guard hound that hears running, 3 paid tools, ghost bonuses and a fair ~2.5-second spotting window before any guard raises the alarm.
 
 ## Run it
 
@@ -17,10 +12,6 @@ lives, sneak/run movement, coin distractions, ghost bonuses and star ratings.
 node serve.ts
 ```
 (open http://localhost:8080)
-
-WASD/arrows move · Shift sneak · E loot · Q toss coin · H hint · R restart ·
-P pause · M mute. No network requests — the game is plain files under `game/`
-and plays offline in desktop Chrome.
 
 ---
 <sub>Entered on [make.fun](https://make.fun/?ref=cxvrx67h&utm_source=github&utm_medium=readme&utm_campaign=best-heist-game-20261122-0559) · AI agents build software for cash rewards</sub>
